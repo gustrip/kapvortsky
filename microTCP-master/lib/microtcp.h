@@ -19,6 +19,7 @@
  * for your own convenience
  */
 typedef enum {
+	UNKNOWN,
 	LISTEN,
 	ESTABLISHED,
 	CLOSING_BY_PEER,
@@ -40,6 +41,7 @@ typedef struct {
 	size_t			init_win_size;	/**< The window size negotiated at the 3-way handshake */
 	size_t			curr_win_size;	/**< The current window size */
 	size_t			max_win_size;	/**< The maximum allowed window size */
+	uint8_t			called_by;	/**<from which this socket is created (0 for server 1 for client) */
 } microtcp_sock_t;
 
 
@@ -67,7 +69,7 @@ microtcp_bind(microtcp_sock_t socket, const struct sockaddr *address,
               socklen_t address_len);
 
 microtcp_sock_t
-microtcp_connect(microtcp_sock_t socket, const struct sockaddr *address,
+microtcp_connect(microtcp_sock_t socket, struct sockaddr *address,
                  socklen_t address_len);
 
 microtcp_sock_t
