@@ -7,6 +7,7 @@ void main(){
    char *hostaddrp;
   
   microtcp_sock_t server_st=microtcp_socket(AF_INET, SOCK_DGRAM, 0);
+  server_st.called_by=00000000;
    
   printf("server id: %d\n",server_st.sd);
   
@@ -38,6 +39,10 @@ void main(){
     printf("server received datagram from %s (%s)\n", 
 	   hostp->h_name, hostaddrp);
   
+  sleep(2);
+
+ server_st=microtcp_shutdown(server_st,SHUT_RDWR);
+    
  close(server_st.sd);
 
   
