@@ -21,10 +21,15 @@
 #include <arpa/inet.h>
 
 
-
 uint32_t seq_number_client,seq_number_server;
 struct sockaddr *addr;		//save the sockaddr and the socklen for the shutdown function
 socklen_t addr_len;
+
+
+void error(char *msg) {
+  perror(msg);
+  exit(-1);
+}
 
 microtcp_sock_t
 microtcp_socket(int domain, int type, int protocol)
@@ -81,42 +86,46 @@ microtcp_connect(microtcp_sock_t socket, struct sockaddr *address,
 	client_header.future_use1=0;
 	client_header.future_use2=0;
 	client_header.checksum=0;
+	printf("as a client you are sending an SYN packet\n");
 	int k=sendto(socket.sd,(void *)&client_header,sizeof(client_header), 0, address,address_len);
 	if (k==-1){
 		socket.state=INVALID;
 		free(server_header);
 		return socket;
 	}
-	else{
-	  if(recvfrom(socket.sd,server_header,sizeof(*server_header), 0, address, &address_len)==-1){
-		socket.state=INVALID;
-		free(server_header);
-		return socket;
-	  }
-	  if(server_header->control==0000000000001010 && server_header->ack_number==seq_number_client+1){//recieve SYN+ACK with ack_number N+1
-		seq_number_server=server_header->seq_number; 
-		seq_number_client=seq_number_client+1;
-		client_header.seq_number=seq_number_client;
-		client_header.ack_number=seq_number_server+1;
-		client_header.control=0000000000001000;
-		if(sendto(socket.sd,(void *)&client_header,sizeof(client_header), 0, address,address_len)==-1){//send last ACK for the 3-way handshake
-			socket.state=INVALID;
+	else{	
+		if(recvfrom(socket.sd,server_header,sizeof(*server_header), 0, address, &address_len)==-1){
+		      socket.state=INVALID;
+		      free(server_header);
+		      return socket;
+		}
+		printf("you've received something\n");
+		if(server_header->control==0000000000001010 && server_header->ack_number==seq_number_client+1){//recieve SYN+ACK with ack_number N+1
+			printf("that something is SYN and ACK from server\n");
+			seq_number_server=server_header->seq_number; 
+			seq_number_client=seq_number_client+1;
+			client_header.seq_number=seq_number_client;
+			client_header.ack_number=seq_number_server+1;
+			client_header.control=0000000000001000;
+			printf("you are sending an ACK to server \n");
+			if(sendto(socket.sd,(void *)&client_header,sizeof(client_header), 0, address,address_len)==-1){//send last ACK for the 3-way handshake
+				socket.state=INVALID;
+				free(server_header);
+				return socket;
+			}
+			printf("establishing connection\n");
+			socket.state=ESTABLISHED;
 			free(server_header);
 			return socket;
+		}else {
+		      socket.state=INVALID;
+		      free(server_header);
+		      return socket;
 		}
-		socket.state=ESTABLISHED;
-		free(server_header);
-		return socket;
-	  }else {
-	    socket.state=INVALID;
-		free(server_header);
-		return socket;
-	  }
 	}
   
   
 }
-
 
 microtcp_sock_t
 microtcp_accept(microtcp_sock_t socket, struct sockaddr *address,
@@ -129,57 +138,60 @@ microtcp_accept(microtcp_sock_t socket, struct sockaddr *address,
    microtcp_header_t server_header;
    microtcp_header_t * header = malloc(sizeof( *header));
    while(1){
+     printf("as a server you are waiting for something\n");
     int k=recvfrom(socket.sd,header,sizeof(*header), 0, address,&address_len);
     if (k==-1){
 	  socket.state=INVALID;
 	  free(header);
 	  return socket;
    }else if(k>0){
-	if(header->control==0000000000000010){			//if we have a SYN packet
-		seq_number_client=header->seq_number;
-		seq_number_server=rand()%1000+1;
-		server_header.seq_number=seq_number_server;
-		server_header.ack_number=seq_number_client+1;
-		server_header.control=0000000000001010;
-		server_header.window=0;
-		server_header.data_len=0;
-		server_header.future_use0=0;
-		server_header.future_use1=0;
-		server_header.future_use2=0;
-		server_header.checksum=0;
-		if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,address,address_len)==-1){//send SYN && ACK		//send the ack
-			socket.state=INVALID;
-			free(header);
-			return socket;
-		}else{
-		      
-		      if(recvfrom(socket.sd,header,sizeof(*header), 0, address, &address_len)==-1){//receive the final ACK of the 3-way handshake
+    printf("you've received something\n");
+		if(header->control==0000000000000010){			//if we have a SYN packet
+			printf("that something is a SYN packet from server\n");
+			seq_number_client=header->seq_number;
+			seq_number_server=rand()%1000+1;
+			server_header.seq_number=seq_number_server;
+			server_header.ack_number=seq_number_client+1;
+			server_header.control=0000000000001010;
+			server_header.window=0;
+			server_header.data_len=0;
+			server_header.future_use0=0;
+			server_header.future_use1=0;
+			server_header.future_use2=0;
+			server_header.checksum=0;
+			printf("you are sending a SYN and ACK packet to client\n");
+			if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,address,address_len)==-1){//send SYN && ACK		//send the ack
 				socket.state=INVALID;
 				free(header);
 				return socket;
-			
-		      }
-
-			if(header->control==0000000000001000 && header->seq_number==seq_number_client+1
-				&& header->ack_number==seq_number_server+1)
-			{ 
-								    //if seq=previously Seq_client+ and ack is ack_number is seq_server +1 
-								    //and ACK packet
-				socket.state=ESTABLISHED;
-				free(header);
-				return socket;
+			}else{
+			      
+			      if(recvfrom(socket.sd,header,sizeof(*header), 0, address, &address_len)==-1){//receive the final ACK of the 3-way handshake
+					socket.state=INVALID;
+					free(header);
+					return socket;
+				
+			      }
+				printf("you've received something\n");
+				if(header->control==0000000000001000 && header->seq_number==seq_number_client+1
+					&& header->ack_number==seq_number_server+1)
+				{ 
+				printf("this something is an ACK packet from client \n");
+									    //if seq=previously Seq_client+ and ack is ack_number is seq_server +1 
+									    //and ACK packet
+					printf("establishing connection\n");
+					socket.state=ESTABLISHED;
+					free(header);
+					return socket;
+				}
 			}
-		}
-	}else{
+		}else{
 			socket.state=INVALID;
 			free(header);
 			return socket;
+		}
 	}
-
-   }
-   
-   
-   }
+    }
 }
 
 microtcp_sock_t
@@ -195,7 +207,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 		      socket.state=INVALID;
 		      free(header);
 		      return socket;
-		}else{	printf("you received something \n");
+		}else{	printf("you've received something\n");
 			if(header->control==0000000000001001){ //FIN && ACK from client
 				printf("that something is FIN AND ACK from client\n");
 				socket.state=CLOSING_BY_PEER;
@@ -224,13 +236,14 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 						free(header);
 						return socket;
 					}else{ //waiting to receive last ACK from client
-						sleep(2);
+						sleep(1);
 						printf("you also send FIN AND ACK \n");
 						if (recvfrom(socket.sd,header,sizeof(*header), 0, addr,&addr_len)==-1){
 						      socket.state=INVALID;
 						      free(header);
 						      return socket;
-						}else{	printf("you received something\n");
+						}else{	
+							printf("you've received something\n");
 							if(header->control==0000000000001000 && header->seq_number==seq_number_client+1 && 
 							  header->ack_number==seq_number_server+1){
 							  printf("that something is ACK from client...closing\n");
@@ -277,7 +290,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 		  free(server_header);
 		  return socket;
 		}else{
-		      printf("you received something\n");//printf("you received something %d\n",server_header->seq_number );
+		      printf("you've received something\n");
 		      if(server_header->control==0000000000001000 && server_header->ack_number==seq_number_client+1){ //ACK and ack_number=seq_number+1;
 				printf("that something is ACK from server\n");
 				seq_number_server=server_header->seq_number;
@@ -286,7 +299,8 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 					socket.state=INVALID;
 					free(server_header);
 					return socket;
-				}else{  printf("you received something\n");
+				}else{
+					printf("you've received something\n");
 					if(server_header->control==0000000000001001){ //FIN AND ACK message
 						printf("that something is FIN AND ACK from server\n");
 						seq_number_client=seq_number_client+1;
