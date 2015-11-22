@@ -4,21 +4,89 @@
  *  Created on: Oct 25, 2015
  *      Author: surligas
  */
-
-#include <stdlib.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <string.h>
-#include <errno.h>
-#include <stdint.h>
-
-
-#include "../lib/microtcp.h"
+#include "../lib/microtcp.c"
 
 int
 server_tcp(uint16_t listen_port, char *file)
 {
-	/*TODO: Write your code here */
+	int sock,nsocket; 
+	int addr_len; 
+	struct sockaddr_in addr_server;
+	struct sockaddr_in addr_client;
+	char recvbuf[1024]; 
+	sock = socket(AF_INET, SOCK_STREAM, 0);
+	if(sock == -1 )
+	{
+	    error("ERROR: Failed to obtain Socket Descriptor.\n");
+	}
+	else{ 
+	    printf("[Server] Obtaining socket descriptor successfully.\n");
+	}
+
+	addr_server.sin_family = AF_INET; 
+	addr_server.sin_port = htons(listen_port); 
+	addr_server.sin_addr.s_addr = INADDR_ANY; 
+	bzero(&(addr_server.sin_zero), 8); 
+
+	/* Bind a special Port */
+	if( bind(sock, (struct sockaddr*)&addr_server, sizeof(struct sockaddr)) == -1 )
+	{
+	    error("ERROR: Failed to bind Port.\n");
+	}
+	else{ 
+		printf("[Server] Binded tcp port %d in addr 127.0.0.1 sucessfully.\n",listen_port);
+	}
+	if(listen(sock,0) == -1)
+	{
+	    error("ERROR: Failed to listen Port.\n");
+	}
+	else{
+		printf ("[Server] Listening the port %d successfully.\n", listen_port);
+	}
+
+	addr_len = sizeof(struct sockaddr_in);
+
+    /* Wait a connection, and obtain a new socket file despriptor for single connection */
+    if ((nsocket = accept(sock, (struct sockaddr *)&addr_client, &addr_len)) == -1) 
+	{
+	error("ERROR: Obtaining new Socket Despcritor.\n");
+	}
+    else {
+		printf("[Server] Server has got connected from %s.\n", inet_ntoa(addr_client.sin_addr));
+    }
+    char* fl = file;
+    FILE *fp = fopen(fl, "a");
+    if(fp == NULL)
+	    printf("File %s Cannot be opened file on server.\n", fl);
+    else
+    {
+	    bzero(recvbuf, 1024); 
+	    int k = 0;
+	    
+	    while((k = recv(nsocket, recvbuf, 1024, 0))>=0) 
+	    {	
+		//printf("bytes:%d\n",k);
+		if (k == 0) 
+				{
+		      break;
+				}
+		
+		int m = fwrite(recvbuf, sizeof(char), k, fp);
+		if(m < k)
+		{
+		    error("File write failed on server.\n");
+		}
+		if(k < 0)
+		{
+		    error("Error receiving file from client to server.\n");
+		}
+		bzero(recvbuf, 1024);
+	    }
+	    printf("Ok received from client!\n");
+	    fclose(fp);
+   }
+	
+	close(sock);
 	return 0;
 }
 
@@ -33,7 +101,51 @@ server_microtcp(uint16_t listen_port, char *file)
 int
 client_tcp(uint16_t server_port, char *file)
 {
-	/*TODO: Write your code here */
+	int sock,nsocket;
+	char sbuffer[1024];
+	struct sockaddr_in server_addr;
+	if((sock=socket(AF_INET,SOCK_STREAM,0))==-1){
+	   error("ERROR: Failed to obtain Socket Descriptor!\n");
+	}
+	server_addr.sin_family = AF_INET; 
+	server_addr.sin_port = htons(server_port); 
+	inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr); 
+	bzero(&(server_addr.sin_zero), 8);
+	
+	
+	if (connect(sock, (struct sockaddr *)&server_addr, sizeof(struct sockaddr)) == -1)
+	{
+	    error("ERROR: Failed to connect to the host!\n");
+	}
+	
+	char* fl = file;
+	printf("[Client] Sending %s to the Server...", fl);
+	FILE *fp = fopen(fl, "r");
+	if(fp == NULL)
+	{
+	    printf("ERROR: File %s not found.\n", fl);
+		exit(1);
+	}
+	
+	
+	bzero(sbuffer, 1024); 
+	int k; 
+	while((k= fread(sbuffer, sizeof(char), 1024, fp))>0){
+	  int m=send(sock, sbuffer, k, 0);
+		if( k< 0)
+		{
+		    printf("ERROR: Failed to send file %s.\n", fl);
+		    break;
+		}
+		//printf("bytes readed:%d\n",k);
+		//printf("bytes sent:%d\n",m);
+		bzero(sbuffer, 1024);
+	}
+	printf("Ok File %s from Client was Sent!\n", fl);
+	fclose (fp);
+	close(sock);
+	printf("[Client] Connection lost.\n");
+	
 	return 0;
 }
 
@@ -69,8 +181,7 @@ main(int argc, char **argv)
 			break;
 		case 'f':
 			filestr = strdup(optarg);
-			/* A few checks will be nice here...*/
-			/* Convert the given file to absolute path */
+			filestr = realpath(filestr, NULL);
 			break;
 		case 'p':
 			port = atoi(optarg);
@@ -103,6 +214,7 @@ main(int argc, char **argv)
 		}
 		else{
 			exit_code = server_tcp(port, filestr);
+			free(filestr);
 		}
 	}
 	else{
