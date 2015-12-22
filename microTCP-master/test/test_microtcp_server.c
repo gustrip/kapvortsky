@@ -12,7 +12,7 @@ int main(int argc, char **argv){
   port = atoi(argv[1]);
    
   microtcp_sock_t server_st=microtcp_socket(AF_INET, SOCK_DGRAM, 0);
-  server_st.called_by=00000000;
+  //server_st.called_by=00000000;
   if(server_st.state==INVALID){
     error("ERROR at creating microtcp_socket"); 
   }

@@ -2,7 +2,7 @@ cmake_minimum_required (VERSION 2.6)
 project (microtcp)
 
 set (microtcp_version_major 1)
-set (microtcp_version_minor 0.0)
+set (microtcp_version_minor 1.0)
 
 
 # uninstall target
@@ -18,4 +18,4 @@ set(MICROTCP_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/utils CACHE INTERNAL "" FO
 
 add_subdirectory(lib)
 add_subdirectory(test)
-add_subdirectory(utils) 
+#add_subdirectory(utils) 

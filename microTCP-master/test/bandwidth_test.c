@@ -5,93 +5,131 @@
  *      Author: surligas
  */
 #include "../lib/microtcp.c"
+#define CHUNK_SIZE 4096
+
+
+static inline void
+print_statistics(ssize_t received, struct timespec start, struct timespec end)
+{
+	double elapsed = end.tv_sec - start.tv_sec
+		+ (end.tv_nsec - start.tv_nsec) * 1e-9;
+	double megabytes = received / (1024.0 * 1024.0);
+	printf("Data received: %f MB\n", megabytes);
+	printf("Transfer time: %f seconds\n", elapsed);
+	printf("Throughput achieved: %f MB/s\n", megabytes / elapsed);
+}
+
 
 int
-server_tcp(uint16_t listen_port, char *file)
+server_tcp(uint16_t listen_port, const char *file)
 {
-	int sock,nsocket; 
-	int addr_len; 
-	struct sockaddr_in addr_server;
-	struct sockaddr_in addr_client;
-	char recvbuf[1024]; 
-	sock = socket(AF_INET, SOCK_STREAM, 0);
-	if(sock == -1 )
-	{
-	    error("ERROR: Failed to obtain Socket Descriptor.\n");
-	}
-	else{ 
-	    printf("[Server] Obtaining socket descriptor successfully.\n");
+	uint8_t *buffer;
+	FILE *fp;
+	int sock;
+	int accepted;
+	int received;
+	ssize_t written;
+	ssize_t total_bytes = 0;
+	socklen_t client_addr_len;
+
+	struct sockaddr_in sin;
+	struct sockaddr client_addr;
+	struct timespec start_time;
+	struct timespec end_time;
+
+	/* Allocate memory for the application receive buffer */
+	buffer = (uint8_t *)malloc(CHUNK_SIZE);
+	if(!buffer){
+		perror("Allocate application receive buffer");
+		return -EXIT_FAILURE;
 	}
 
-	addr_server.sin_family = AF_INET; 
-	addr_server.sin_port = htons(listen_port); 
-	addr_server.sin_addr.s_addr = INADDR_ANY; 
-	bzero(&(addr_server.sin_zero), 8); 
-
-	/* Bind a special Port */
-	if( bind(sock, (struct sockaddr*)&addr_server, sizeof(struct sockaddr)) == -1 )
-	{
-	    error("ERROR: Failed to bind Port.\n");
-	}
-	else{ 
-		printf("[Server] Binded tcp port %d in addr 127.0.0.1 sucessfully.\n",listen_port);
-	}
-	if(listen(sock,0) == -1)
-	{
-	    error("ERROR: Failed to listen Port.\n");
-	}
-	else{
-		printf ("[Server] Listening the port %d successfully.\n", listen_port);
+	/* Open the file for writing the data from the network */
+	fp = fopen(file, "w");
+	if(!fp){
+		perror("Open file for writing");
+		free(buffer);
+		return -EXIT_FAILURE;
 	}
 
-	addr_len = sizeof(struct sockaddr_in);
-
-    /* Wait a connection, and obtain a new socket file despriptor for single connection */
-    if ((nsocket = accept(sock, (struct sockaddr *)&addr_client, &addr_len)) == -1) 
-	{
-	error("ERROR: Obtaining new Socket Despcritor.\n");
+	if ((sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
+		perror("Opening TCP socket");
+		free(buffer);
+		fclose(fp);
+		return -EXIT_FAILURE;
 	}
-    else {
-		printf("[Server] Server has got connected from %s.\n", inet_ntoa(addr_client.sin_addr));
-    }
-    char* fl = file;
-    FILE *fp = fopen(fl, "a");
-    if(fp == NULL)
-	    printf("File %s Cannot be opened file on server.\n", fl);
-    else
-    {
-	    bzero(recvbuf, 1024); 
-	    int k = 0;
-	    
-	    while((k = recv(nsocket, recvbuf, 1024, 0))>=0) 
-	    {	
-		//printf("bytes:%d\n",k);
-		if (k == 0) 
-				{
-		      break;
-				}
-		
-		int m = fwrite(recvbuf, sizeof(char), k, fp);
-		if(m < k)
-		{
-		    error("File write failed on server.\n");
+
+	memset(&sin, 0, sizeof(struct sockaddr_in));
+	sin.sin_family = AF_INET;
+	sin.sin_port = htons(listen_port);
+	/* Bind to all available network interfaces */
+	sin.sin_addr.s_addr = INADDR_ANY;
+
+	if (bind(sock, (struct sockaddr *) &sin, sizeof(struct sockaddr_in)) == -1) {
+		perror("TCP bind");
+		free(buffer);
+		fclose(fp);
+		return -EXIT_FAILURE;
+	}
+
+	if (listen(sock, 1000) == -1) {
+		perror("TCP listen");
+		free(buffer);
+		fclose(fp);
+		return -EXIT_FAILURE;
+	}
+
+	/* Accept a connection from the client */
+	client_addr_len = sizeof(struct sockaddr);
+	accepted = accept(sock, &client_addr, &client_addr_len);
+	if(accepted < 0){
+		perror("TCP accept");
+		free(buffer);
+		fclose(fp);
+		return -EXIT_FAILURE;
+	}
+
+	/*
+	 * Start processing the received data.
+	 *
+	 * Also start measuring time. Not the most accurate measurement, but
+	 * it is a good starting point.
+	 *
+	 * At hy-435 we deal with bandwidth measurements software in a more
+	 * right and careful way :-)
+	 */
+
+	clock_gettime(CLOCK_MONOTONIC_RAW, &start_time);
+	while( (received = recv(accepted, buffer, CHUNK_SIZE, 0)) > 0){
+		written = fwrite(buffer, sizeof(uint8_t), received, fp);
+		total_bytes += received;
+		if(written * sizeof(uint8_t) != received){
+			printf("Failed to write to the file the"
+			       " amount of data received from the network.\n");
+			shutdown(accepted, SHUT_RDWR);
+			shutdown(sock, SHUT_RDWR);
+			close(accepted);
+			close(sock);
+			free(buffer);
+			fclose(fp);
+			return -EXIT_FAILURE;
 		}
-		if(k < 0)
-		{
-		    error("Error receiving file from client to server.\n");
-		}
-		bzero(recvbuf, 1024);
-	    }
-	    printf("Ok received from client!\n");
-	    fclose(fp);
-   }
-	
+	}
+	clock_gettime(CLOCK_MONOTONIC_RAW, &end_time);
+	print_statistics(total_bytes, start_time, end_time);
+
+	shutdown(accepted, SHUT_RDWR);
+	shutdown(sock, SHUT_RDWR);
+	close(accepted);
 	close(sock);
+	fclose(fp);
+	free(buffer);
+
 	return 0;
 }
 
 int
-server_microtcp(uint16_t listen_port, char *file)
+server_microtcp(uint16_t listen_port, const char *file)
 {
 	/*TODO: Write your code here */
 	return 0;
@@ -99,58 +137,88 @@ server_microtcp(uint16_t listen_port, char *file)
 
 
 int
-client_tcp(uint16_t server_port, char *file)
+client_tcp(const char *serverip, uint16_t server_port, const char *file)
 {
-	int sock,nsocket;
-	char sbuffer[1024];
-	struct sockaddr_in server_addr;
-	if((sock=socket(AF_INET,SOCK_STREAM,0))==-1){
-	   error("ERROR: Failed to obtain Socket Descriptor!\n");
+	uint8_t *buffer;
+	int sock;
+	socklen_t client_addr_len;
+	FILE *fp;
+	size_t read_items = 0;
+	ssize_t data_sent;
+
+	struct sockaddr *client_addr;
+
+	/* Allocate memory for the application receive buffer */
+	buffer = (uint8_t *)malloc(CHUNK_SIZE);
+	if(!buffer){
+		perror("Allocate application receive buffer");
+		return -EXIT_FAILURE;
 	}
-	server_addr.sin_family = AF_INET; 
-	server_addr.sin_port = htons(server_port); 
-	inet_pton(AF_INET, "127.0.0.1", &server_addr.sin_addr); 
-	bzero(&(server_addr.sin_zero), 8);
-	
-	
-	if (connect(sock, (struct sockaddr *)&server_addr, sizeof(struct sockaddr)) == -1)
-	{
-	    error("ERROR: Failed to connect to the host!\n");
+
+	/* Open the file for writing the data from the network */
+	fp = fopen(file, "r");
+	if(!fp){
+		perror("Open file for reading");
+		free(buffer);
+		return -EXIT_FAILURE;
 	}
-	
-	char* fl = file;
-	printf("[Client] Sending %s to the Server...", fl);
-	FILE *fp = fopen(fl, "r");
-	if(fp == NULL)
-	{
-	    printf("ERROR: File %s not found.\n", fl);
-		exit(1);
+
+	if ((sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) == -1) {
+		perror("Opening TCP socket");
+		free(buffer);
+		fclose(fp);
+		return -EXIT_FAILURE;
 	}
-	
-	
-	bzero(sbuffer, 1024); 
-	int k; 
-	while((k= fread(sbuffer, sizeof(char), 1024, fp))>0){
-	  int m=send(sock, sbuffer, k, 0);
-		if( k< 0)
-		{
-		    printf("ERROR: Failed to send file %s.\n", fl);
-		    break;
+
+	struct sockaddr_in sin;
+	memset(&sin, 0, sizeof(struct sockaddr_in));
+	sin.sin_family = AF_INET;
+	/*Port that server listens at */
+	sin.sin_port = htons(server_port);
+	/* The server's IP*/
+	sin.sin_addr.s_addr = inet_addr(serverip);
+
+	if (connect(sock, (struct sockaddr *) &sin, sizeof(struct sockaddr_in)) == -1) {
+		perror("TCP connect");
+		exit(EXIT_FAILURE);
+	}
+
+	printf("Starting sending data...\n");
+	/* Start sending the data */
+	while( !feof(fp) ){
+		read_items = fread(buffer, sizeof(uint8_t), CHUNK_SIZE, fp);
+		if(read_items < 1){
+			perror("Failed read from file");
+			shutdown(sock, SHUT_RDWR);
+			close(sock);
+			free(buffer);
+			fclose(fp);
+			return -EXIT_FAILURE;
 		}
-		//printf("bytes readed:%d\n",k);
-		//printf("bytes sent:%d\n",m);
-		bzero(sbuffer, 1024);
+
+		data_sent = send(sock, buffer, read_items * sizeof(uint8_t), 0);
+		if(data_sent != read_items * sizeof(uint8_t)){
+			printf("Failed to send the"
+			       " amount of data read from the file.\n");
+			shutdown(sock, SHUT_RDWR);
+			close(sock);
+			free(buffer);
+			fclose(fp);
+			return -EXIT_FAILURE;
+		}
+
 	}
-	printf("Ok File %s from Client was Sent!\n", fl);
-	fclose (fp);
+
+	printf("Data sent. Terminating...\n");
+	shutdown(sock, SHUT_RDWR);
 	close(sock);
-	printf("[Client] Connection lost.\n");
-	
+	free(buffer);
+	fclose(fp);
 	return 0;
 }
 
 int
-client_microtcp(uint16_t server_port, char *file)
+client_microtcp(const char *serverip, uint16_t server_port, const char *file)
 {
 	/*TODO: Write your code here */
 	return 0;
@@ -163,12 +231,13 @@ main(int argc, char **argv)
 	int 		opt;
 	int 		port;
 	int		exit_code = 0;
-	char 		*filestr;
+	char 		*filestr = NULL;
+	char		*ipstr = NULL;
 	uint8_t		is_server = 0;
 	uint8_t		use_microtcp = 0;
 
 	/* A very easy way to parse command line arguments */
-	while ((opt = getopt(argc, argv, "hsmf:p:")) != -1) {
+	while ((opt = getopt(argc, argv, "hsmf:p:a:")) != -1) {
 		switch (opt)
 			{
 		/* If -s is set, program runs on server mode */
@@ -181,11 +250,15 @@ main(int argc, char **argv)
 			break;
 		case 'f':
 			filestr = strdup(optarg);
-			filestr = realpath(filestr, NULL);
+			/* A few checks will be nice here...*/
+			/* Convert the given file to absolute path */
 			break;
 		case 'p':
 			port = atoi(optarg);
 			/* To check or not to check? */
+			break;
+		case 'a':
+			ipstr = strdup(optarg);
 			break;
 
 		default:
@@ -196,35 +269,39 @@ main(int argc, char **argv)
 			       "   -f <string>         If -s is set the -f option specifies the filename of the file that will be saved.\n"
 			       "                       If not, is the source file at the client side that will be sent to the server.\n"
 			       "   -p <int>            The listening port of the server\n"
+			       "   -a <string>         The IP address of the server. This option is ignored if the tool runs in server mode.\n"
 			       "   -h                  prints this help\n");
 			exit(EXIT_FAILURE);
 			}
 	}
 
 	/*
-	 * TODO: Some error cheking here???
+	 * TODO: Some error checking here???
 	 */
 
 	/*
-	 * Depending the use arguements execute the appropriate functions
+	 * Depending the use arguments execute the appropriate functions
 	 */
 	if(is_server){
+
 		if(use_microtcp){
 			exit_code = server_microtcp(port, filestr);
 		}
 		else{
 			exit_code = server_tcp(port, filestr);
-			free(filestr);
 		}
 	}
 	else{
 		if(use_microtcp){
-			exit_code = client_microtcp(port, filestr);
+			exit_code = client_microtcp(ipstr, port, filestr);
 		}
 		else{
-			exit_code = client_tcp(port, filestr);
+			exit_code = client_tcp(ipstr, port, filestr);
 		}
 	}
+
+	free(filestr);
+	free(ipstr);
 	return exit_code;
 }
 

@@ -22,7 +22,7 @@ int main(int argc, char **argv){
   
   
   microtcp_sock_t client_st=microtcp_socket(AF_INET, SOCK_DGRAM, 0);
-  client_st.called_by=00000001;
+  //client_st.called_by=00000001;
   if(client_st.state==INVALID){
     error("ERROR at creating microtcp_socket"); 
   }
