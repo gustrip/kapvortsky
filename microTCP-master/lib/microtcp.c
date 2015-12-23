@@ -8,18 +8,53 @@
 #include "microtcp.h"
 #include "../utils/crc32.h"
 
+microtcp_packet_t *create_packet(microtcp_header_t *header,void *data,size_t length){
+        microtcp_packet_t *packet=malloc(sizeof(microtcp_packet_t));
+        packet->header=malloc(sizeof( *header));
+        packet->data=malloc(length);
+       // memcpy(packet->header,header,s
+        return packet;
+}
+void free_packet(microtcp_packet_t  *packet){
+    free(packet->header);
+    free(packet->data);
+    free(packet);
+}
 
+void set_timeout(microtcp_sock_t *socket){
+    struct timeval timeout;
+    timeout.tv_sec =0;
+    timeout.tv_usec = MICROTCP_ACK_TIMEOUT_US ;
+    if ( setsockopt (socket->sd,SOL_SOCKET,SO_RCVTIMEO,(char *)&timeout,sizeof(struct timeval)) < 0) 
+    {
+        perror (" setsockopt ");
+    }
+}
 
-uint32_t seq_number_client,seq_number_server;
-struct sockaddr *addr;		//save the sockaddr and the socklen for the shutdown function
-socklen_t addr_len;
+uint8_t error_checking1(microtcp_header_t *buf, size_t len){
+    uint32_t rcv_csum=buf->checksum;
+    buf->checksum=0;
+    uint32_t sum=crc32(buf,len);
+    if(rcv_csum==sum){
+        return 1;
+    }
+    return -1;
+    
+}
+uint32_t make_checksum(microtcp_header_t *buf, size_t len){
+    buf->checksum=0;
+    uint32_t csum=crc32(buf,len);
+    return csum;
+}
 
 
 void error(char *msg) {
   perror(msg);
   exit(-1);
 }
-
+void empty_rcvbuf(microtcp_sock_t *socket,void *buffer){
+    
+}
 microtcp_sock_t
 microtcp_socket(int domain, int type, int protocol)
 {
@@ -36,6 +71,7 @@ microtcp_socket(int domain, int type, int protocol)
     s.state=UNKNOWN;
     s.init_win_size=0;
     s.curr_win_size=0;
+    
     return s;
   
 }
@@ -51,13 +87,14 @@ microtcp_bind(microtcp_sock_t socket, const struct sockaddr *address,
         return -1;
 	
     }
+    
     return 1;
 }
 
 microtcp_sock_t
 microtcp_connect(microtcp_sock_t socket, struct sockaddr *address,
                  socklen_t address_len)
-{
+{       
 	socket.addr=address;
 	socket.addr_len=address_len;
 	time_t t;
@@ -75,6 +112,7 @@ microtcp_connect(microtcp_sock_t socket, struct sockaddr *address,
 	client_header.future_use1=0;
 	client_header.future_use2=0;
 	client_header.checksum=0;
+        client_header.checksum=make_checksum(&client_header,sizeof(client_header));
 	printf("as a client you are sending an SYN packet\n");
 	int k=sendto(socket.sd,(void *)&client_header,sizeof(client_header), 0, address,address_len);
 	if (k==-1){
@@ -89,6 +127,12 @@ microtcp_connect(microtcp_sock_t socket, struct sockaddr *address,
 		      return socket;
 		}
 		printf("you've received something\n");
+                if(!error_checking1(server_header,sizeof(*server_header))){     //bad packet at error checking 
+                    printf("bad connection.socket is closing.maybe sender will communicate later\n");
+                    socket.state=INVALID;
+                    free(server_header);
+                    return socket;
+                }
 		if(server_header->control==0000000000001010 && server_header->ack_number==socket.seq_number+1){//recieve SYN+ACK with ack_number N+1
 			printf("that something is SYN and ACK from server\n");
 			socket.ack_number=server_header->seq_number; 
@@ -97,6 +141,7 @@ microtcp_connect(microtcp_sock_t socket, struct sockaddr *address,
 			client_header.ack_number=socket.ack_number+1;
 			client_header.control=0000000000001000;
 			printf("you are sending an ACK to server \n");
+                        client_header.checksum=make_checksum(&client_header,sizeof(client_header));
 			if(sendto(socket.sd,(void *)&client_header,sizeof(client_header), 0, address,address_len)==-1){//send last ACK for the 3-way handshake
 				socket.state=INVALID;
 				free(server_header);
@@ -120,6 +165,7 @@ microtcp_sock_t
 microtcp_accept(microtcp_sock_t socket, struct sockaddr *address,
                  socklen_t address_len)
 {
+   uint32_t csum,rcv_csum;
    socket.addr=address;
    socket.addr_len=address_len;
    time_t t;
@@ -134,6 +180,12 @@ microtcp_accept(microtcp_sock_t socket, struct sockaddr *address,
 	  free(header);
 	  return socket;
    }else if(k>0){
+    if(!error_checking1(header,sizeof(*header))){     //bad packet at error checking 
+        printf("bad connection.socket is closing.maybe sender will communicate later\n");
+        socket.state=INVALID;
+        free(header);
+        return socket;
+    }
     printf("you've received something\n");
 		if(header->control==0000000000000010){			//if we have a SYN packet
 			printf("that something is a SYN packet from server\n");
@@ -148,6 +200,7 @@ microtcp_accept(microtcp_sock_t socket, struct sockaddr *address,
 			server_header.future_use1=0;
 			server_header.future_use2=0;
 			server_header.checksum=0;
+                        server_header.checksum=make_checksum(&server_header,sizeof(server_header));
 			printf("you are sending a SYN and ACK packet to client\n");
 			if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,address,address_len)==-1){//send SYN && ACK		//send the ack
 				socket.state=INVALID;
@@ -162,6 +215,12 @@ microtcp_accept(microtcp_sock_t socket, struct sockaddr *address,
 				
 			      }
 				printf("you've received something\n");
+                                if(!error_checking1(header,sizeof(*header))){     //bad packet at error checking 
+                                    printf("bad connection.socket is closing.maybe sender will communicate later\n");
+                                    socket.state=INVALID;
+                                    free(header);
+                                    return socket;
+                                }
 				if(header->control==0000000000001000 && header->seq_number==socket.ack_number+1
 					&& header->ack_number==socket.seq_number+1)
 				{ 
@@ -187,77 +246,61 @@ microtcp_sock_t
 microtcp_shutdown(microtcp_sock_t socket, int how)
 {
 	if(socket.state==CLOSING_BY_PEER){ //server side
-	  
+                microtcp_header_t * header = malloc(sizeof( *header));
 		printf("you are the server\n");
 		microtcp_header_t server_header;
-		microtcp_header_t * header = malloc(sizeof( *header));
-		int k=recvfrom(socket.sd,header,sizeof(*header), 0, socket.addr,&socket.addr_len);
-		if (k==-1){
-		      socket.state=INVALID;
-		      free(header);
-		      return socket;
-		}else{	printf("you've received something\n");
-			if(header->control==0000000000001001){ //FIN && ACK from client
-				printf("that something is FIN AND ACK from client\n");
-				socket.state=CLOSING_BY_PEER;
-				socket.ack_number=header->seq_number;
-				socket.seq_number=socket.seq_number+1;
-				server_header.seq_number=socket.seq_number;
-				server_header.ack_number=socket.ack_number+1;
-				server_header.control=0000000000001000; 		//ACK for the FIN message
-				server_header.window=0;
-				server_header.data_len=0;
-				server_header.future_use0=0;
-				server_header.future_use1=0;
-				server_header.future_use2=0;
-				server_header.checksum=0;
-				if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,socket.addr,socket.addr_len)==-1){//send  ACK
-					socket.state=INVALID;
-					free(header);
-					return socket;
-				}else{
-					printf("and you send ACK\n");
-					server_header.seq_number=socket.seq_number;
-					server_header.ack_number=0;
-					server_header.control=0000000000001001; //FIN && ACK to close the connection
-					if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,socket.addr,socket.addr_len)==-1){//send SYN && ACK		//send the ack
-						socket.state=INVALID;
-						free(header);
-						return socket;
-					}else{ //waiting to receive last ACK from client
-						sleep(1);
-						printf("you also send FIN AND ACK \n");
-						if (recvfrom(socket.sd,header,sizeof(*header), 0, socket.addr,&socket.addr_len)==-1){
-						      socket.state=INVALID;
-						      free(header);
-						      return socket;
-						}else{	
-							printf("you've received something\n");
-							if(header->control==0000000000001000 && header->seq_number==socket.ack_number+1 && 
-							  header->ack_number==socket.seq_number+1){
-							  printf("that something is ACK from client...closing\n");
-							  socket.state=CLOSED;
-							  return socket;
-							}
-						}
-					  
-					  
-					}
-				}
-				
-			}else{
-				socket.state=INVALID;
-				free(header);
-				return socket;
-			}
-		  
-		}
+                server_header.seq_number=socket.seq_number;
+                server_header.ack_number=socket.ack_number+1;
+                server_header.control=0000000000001000; 		//ACK for the FIN message
+                server_header.window=0;
+                server_header.data_len=0;
+                server_header.future_use0=0;
+                server_header.future_use1=0;
+                server_header.future_use2=0;
+                server_header.checksum=0;
+                if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,socket.addr,socket.addr_len)==-1){//send  ACK
+                        socket.state=INVALID;
+                        free(header);
+                        return socket;
+                }else{
+                        printf("and you send ACK\n");
+                        server_header.seq_number=socket.seq_number;
+                        server_header.ack_number=0;
+                        server_header.control=0000000000001001; //FIN && ACK to close the connection
+                        if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,socket.addr,socket.addr_len)==-1){//send SYN && ACK		//send the ack
+                                socket.state=INVALID;
+                                free(header);
+                                return socket;
+                        }else{ //waiting to receive last ACK from client
+                                sleep(1);
+                                printf("you also send FIN AND ACK \n");
+                                if (recvfrom(socket.sd,header,sizeof(*header), 0, socket.addr,&socket.addr_len)==-1){
+                                        socket.state=INVALID;
+                                        free(header);
+                                        return socket;
+                                }else{	
+                                        printf("you've received something\n");
+                                        if(header->control==0000000000001000 && header->seq_number==socket.ack_number+1 && 
+                                            header->ack_number==socket.seq_number+1){
+                                            printf("that something is ACK from client...closing\n");
+                                            socket.state=CLOSED;
+                                            return socket;
+                                        }
+                                }
+                            
+                            
+                        }
+                }
+                        
+                
+            
+            
 	  
 	}else{		//client side;
 		printf("you are client\n");
 		microtcp_header_t client_header;
 		microtcp_header_t * server_header = malloc(sizeof( *server_header));
-		seq_number_client=seq_number_client+1;
+		socket.seq_number=socket.seq_number+1;
 		client_header.seq_number=socket.seq_number;
 		client_header.ack_number=socket.ack_number+1;
 		client_header.control=0000000000001001; //FIN AND ACK with ack_number the previously received seq_number_server;
@@ -333,11 +376,31 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 ssize_t
 microtcp_send(microtcp_sock_t *socket, const void *buffer, size_t length, int flags)
 {
-	/* Your code here */
+	
 }
 
 ssize_t
 microtcp_recv(microtcp_sock_t *socket, void *buffer, size_t length, int flags)
-{
-	/* Your code here */
+{   set_timeout(socket); //setting timeout to MICROTCP_ACK_TIMEOUT_US
+    while(1){
+        microtcp_header_t server_header;
+        microtcp_header_t * header = malloc(sizeof( *header));
+        int k=recvfrom(socket->sd,header,sizeof(*header), 0, socket->addr,&socket->addr_len);
+        if (k==-1){
+                socket->state=INVALID;
+                free(header);
+                return -1;
+        }else{	printf("you've received something\n");
+                if(header->control==0000000000001001){ //FIN && ACK from client
+                        printf("that something is FIN AND ACK from client\n");
+                        socket->state=CLOSING_BY_PEER;
+                        socket->ack_number=header->seq_number;
+                        socket->seq_number=socket->seq_number+1;
+                        return -1;
+                }
+                else{
+                        
+                }
+        }
+    }
 }

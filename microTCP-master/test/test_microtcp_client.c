@@ -43,6 +43,8 @@ int main(int argc, char **argv){
     error("ERROR at connect function(problem with 3-way handshake"); 
   }
   
+  send(&client_st,hostname,sizeof(hostname),0);
+  
   client_st=microtcp_shutdown(client_st,SHUT_RDWR);
   if(client_st.state==INVALID){
       error("ERROR at shutdown");

@@ -42,11 +42,25 @@ int main(int argc, char **argv){
     printf("server received datagram from %s (%s)\n", 
 	   hostp->h_name, hostaddrp);
   
- server_st=microtcp_shutdown(server_st,SHUT_RDWR);
- if(server_st.state==INVALID){
-      error("ERROR at shutdown");
-  }  
- close(server_st.sd);
+
+   if(microtcp_recv(&server_st,hostaddrp,sizeof(hostaddrp),0)==-1){
+       if(server_st.state==INVALID){
+            error("ERROR at recv when shutdowning");
+        }else if(server_st.state==CLOSING_BY_PEER){
+            server_st=microtcp_shutdown(server_st,SHUT_RDWR);
+            if(server_st.state==INVALID){
+                error("ERROR at shutdown");
+            }  
+            close(server_st.sd);
+        } 
+   
+   }
+    if(server_st.state==INVALID){
+        error("ERROR at recv");
+    }
+       
+   
+    
 
   
  
