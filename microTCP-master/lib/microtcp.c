@@ -8,18 +8,7 @@
 #include "microtcp.h"
 #include "../utils/crc32.h"
 
-microtcp_packet_t *create_packet(microtcp_header_t *header,void *data,size_t length){
-        microtcp_packet_t *packet=malloc(sizeof(microtcp_packet_t));
-        packet->header=malloc(sizeof( *header));
-        packet->data=malloc(length);
-       // memcpy(packet->header,header,s
-        return packet;
-}
-void free_packet(microtcp_packet_t  *packet){
-    free(packet->header);
-    free(packet->data);
-    free(packet);
-}
+
 
 void set_timeout(microtcp_sock_t *socket){
     struct timeval timeout;
@@ -46,15 +35,27 @@ uint32_t make_checksum(microtcp_header_t *buf, size_t len){
     uint32_t csum=crc32(buf,len);
     return csum;
 }
-
+microtcp_header_t create_header(microtcp_sock_t *socket,size_t length){
+    microtcp_header_t  header ;
+    header.seq_number=socket->seq_number;
+    header.ack_number=socket->ack_number;
+    header.control=0000000000001000;
+    header.window=0;
+    header.data_len=length;
+    header.future_use0=0;
+    header.future_use1=0;
+    header.future_use2=0;
+    header.checksum=0;
+    header.checksum=make_checksum(&header,sizeof(microtcp_header_t));
+    return header;
+    
+}
 
 void error(char *msg) {
   perror(msg);
   exit(-1);
 }
-void empty_rcvbuf(microtcp_sock_t *socket,void *buffer){
-    
-}
+
 microtcp_sock_t
 microtcp_socket(int domain, int type, int protocol)
 {
@@ -71,7 +72,11 @@ microtcp_socket(int domain, int type, int protocol)
     s.state=UNKNOWN;
     s.init_win_size=0;
     s.curr_win_size=0;
-    
+    s.buf_fill_level=0;
+    s.cwnd=0;
+    s.ssthresh=0;
+    s.seq_number=0;
+    s.ack_number=0;
     return s;
   
 }
@@ -149,6 +154,7 @@ microtcp_connect(microtcp_sock_t socket, struct sockaddr *address,
 			}
 			printf("establishing connection\n");
 			socket.state=ESTABLISHED;
+                        socket.recvbuf=(uint8_t *)malloc(MICROTCP_RECVBUF_LEN);
 			free(server_header);
 			return socket;
 		}else {
@@ -229,6 +235,7 @@ microtcp_accept(microtcp_sock_t socket, struct sockaddr *address,
 									    //and ACK packet
 					printf("establishing connection\n");
 					socket.state=ESTABLISHED;
+                                        socket.recvbuf=(uint8_t *)malloc(MICROTCP_RECVBUF_LEN);
 					free(header);
 					return socket;
 				}
@@ -261,6 +268,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
                 if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,socket.addr,socket.addr_len)==-1){//send  ACK
                         socket.state=INVALID;
                         free(header);
+                        free(socket.recvbuf);
                         return socket;
                 }else{
                         printf("and you send ACK\n");
@@ -270,6 +278,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
                         if (sendto(socket.sd,(void *)&server_header,sizeof(server_header),0,socket.addr,socket.addr_len)==-1){//send SYN && ACK		//send the ack
                                 socket.state=INVALID;
                                 free(header);
+                                free(socket.recvbuf);
                                 return socket;
                         }else{ //waiting to receive last ACK from client
                                 sleep(1);
@@ -277,6 +286,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
                                 if (recvfrom(socket.sd,header,sizeof(*header), 0, socket.addr,&socket.addr_len)==-1){
                                         socket.state=INVALID;
                                         free(header);
+                                        free(socket.recvbuf);
                                         return socket;
                                 }else{	
                                         printf("you've received something\n");
@@ -284,6 +294,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
                                             header->ack_number==socket.seq_number+1){
                                             printf("that something is ACK from client...closing\n");
                                             socket.state=CLOSED;
+                                        free(socket.recvbuf);
                                             return socket;
                                         }
                                 }
@@ -298,28 +309,32 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 	  
 	}else{		//client side;
 		printf("you are client\n");
-		microtcp_header_t client_header;
-		microtcp_header_t * server_header = malloc(sizeof( *server_header));
-		socket.seq_number=socket.seq_number+1;
-		client_header.seq_number=socket.seq_number;
-		client_header.ack_number=socket.ack_number+1;
+                void *send_buffer;
+                socket.seq_number=socket.seq_number+1;
+		microtcp_header_t client_header=create_header(&socket,0);
+		microtcp_header_t * server_header = malloc(sizeof(microtcp_header_t));
 		client_header.control=0000000000001001; //FIN AND ACK with ack_number the previously received seq_number_server;
-		client_header.window=0;
-		client_header.data_len=0;
-		client_header.future_use0=0;
-		client_header.future_use1=0;
-		client_header.future_use2=0;
-		client_header.checksum=0;
-	  int k=sendto(socket.sd,(void *)&client_header,sizeof(client_header), 0, socket.addr,socket.addr_len);
+                uint8_t *data=malloc(MICROTCP_MSS);
+                memset(data,0,MICROTCP_MSS);
+                send_buffer=malloc(sizeof(microtcp_header_t)+MICROTCP_MSS); //32 bytes for header and the rest for the buffer;
+                memcpy(send_buffer,&client_header,sizeof(microtcp_header_t));
+                send_buffer+=sizeof(microtcp_header_t);
+                memcpy(send_buffer,data,MICROTCP_MSS);
+                send_buffer-=sizeof(microtcp_header_t);
+                
+	  int k=sendto(socket.sd,send_buffer,sizeof(microtcp_header_t)+MICROTCP_MSS, 0, socket.addr,socket.addr_len);
 	  if (k==-1){
 			socket.state=INVALID;
+                        free(send_buffer);
 			free(server_header);
+                        free(socket.recvbuf);
 			return socket;
 	  }else{
 	    printf("you send a FIN AND ACK packet to server \n");
 		if(recvfrom(socket.sd,server_header,sizeof(*server_header), 0, socket.addr, &socket.addr_len)==-1){
 		  socket.state=INVALID;
 		  free(server_header);
+                  free(socket.recvbuf);
 		  return socket;
 		}else{
 		      printf("you've received something\n");
@@ -330,6 +345,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 				if(recvfrom(socket.sd,server_header,sizeof(*server_header), 0, socket.addr, &socket.addr_len)==-1){
 					socket.state=INVALID;
 					free(server_header);
+                                        free(socket.recvbuf);
 					return socket;
 				}else{
 					printf("you've received something\n");
@@ -343,10 +359,12 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 						if (k==-1){   
 							      socket.state=INVALID;
 							      free(server_header);
+                                                              free(socket.recvbuf);
 							      return socket;
 						}else{
 							printf("sending last ACK to server...closing\n");
 							socket.state=CLOSED;
+                                                        free(socket.recvbuf);
 							return socket;
 						}
 						
@@ -354,6 +372,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 					}else{			//wrong FIN message
 						socket.state=INVALID;
 						free(server_header);
+                                                free(socket.recvbuf);
 						return socket;
 					  
 					}
@@ -375,32 +394,129 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 }
 ssize_t
 microtcp_send(microtcp_sock_t *socket, const void *buffer, size_t length, int flags)
-{
-	
+{       void *send_buffer;
+        send_buffer=malloc(sizeof(microtcp_header_t)+MICROTCP_MSS); //32 bytes for header and the rest for the buffer;
+        set_timeout(socket);
+        int remaining;
+        int data_sent=0;
+        int bytes_to_send,chunks;
+        remaining=length;
+        while(data_sent<length){
+//             printf("data_send: %d-----",data_sent);
+//             printf("remaining: %d-----",remaining);
+            bytes_to_send=remaining;
+//             printf("bytes_to_send: %d----",bytes_to_send);
+            chunks=bytes_to_send/(sizeof(microtcp_header_t)+MICROTCP_MSS);
+            int i;
+            for(i = 0; i < chunks ; i++){
+                buffer+=i*MICROTCP_MSS;
+//                 printf("buffer index: %d-----",i*MICROTCP_MSS);
+                microtcp_header_t  header =create_header(socket,length);
+                memcpy(send_buffer,&header,sizeof(microtcp_header_t));
+                send_buffer+=sizeof(microtcp_header_t);
+                memcpy(send_buffer,buffer,MICROTCP_MSS);
+                send_buffer-=sizeof(microtcp_header_t);
+                int k=sendto(socket->sd,send_buffer,sizeof(send_buffer), 0, socket->addr,socket->addr_len);
+                if (k==-1){
+                        socket->state=INVALID;
+                        free(send_buffer);
+                }
+            }
+            int s=bytes_to_send % (sizeof(microtcp_header_t)+MICROTCP_MSS);
+            if(s){
+                chunks++;
+                buffer+=i*MICROTCP_MSS;
+//                 printf("buffer index: %d-----",i*MICROTCP_MSS);
+//                 printf("s: %d\n",s);
+//                 printf("buffer remaining: %d-----",length-(i*MICROTCP_MSS));
+                microtcp_header_t  header =create_header(socket,length);
+                memcpy(send_buffer,&header,sizeof(microtcp_header_t));
+                send_buffer+=sizeof(microtcp_header_t);
+                memcpy(send_buffer,buffer,length-(i*MICROTCP_MSS));
+                send_buffer-=sizeof(microtcp_header_t);
+                int k=sendto(socket->sd,send_buffer,sizeof(send_buffer), 0, socket->addr,socket->addr_len);
+                if (k==-1){
+                        socket->state=INVALID;
+                        free(send_buffer);
+                }
+            }
+//             printf("chunks: %d\n",chunks);
+            remaining -= bytes_to_send ;
+            data_sent += bytes_to_send ;
+//             printf("data_send: %d\n",data_sent);
+//             printf("remaining: %d\n",remaining);
+        }
+        buffer-=data_sent;
+	return data_sent;
+        
 }
 
 ssize_t
 microtcp_recv(microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 {   set_timeout(socket); //setting timeout to MICROTCP_ACK_TIMEOUT_US
+    void *rcv_buffer;
+    printf("o pointer paidia: %d\n",socket->recvbuf);
     while(1){
-        microtcp_header_t server_header;
-        microtcp_header_t * header = malloc(sizeof( *header));
-        int k=recvfrom(socket->sd,header,sizeof(*header), 0, socket->addr,&socket->addr_len);
+        microtcp_header_t * header = malloc(sizeof( microtcp_header_t ));
+        memset(header,0,sizeof(microtcp_header_t));
+        rcv_buffer=malloc(sizeof(microtcp_header_t)+MICROTCP_MSS);
+        int k=recvfrom(socket->sd,rcv_buffer,sizeof(microtcp_header_t)+MICROTCP_MSS, 0, socket->addr,&socket->addr_len);        
         if (k==-1){
                 socket->state=INVALID;
-                free(header);
+                free(rcv_buffer);
                 return -1;
         }else{	printf("you've received something\n");
+                rcv_buffer+=sizeof(microtcp_header_t);
+                memcpy(header,rcv_buffer,sizeof(microtcp_header_t));
                 if(header->control==0000000000001001){ //FIN && ACK from client
                         printf("that something is FIN AND ACK from client\n");
                         socket->state=CLOSING_BY_PEER;
                         socket->ack_number=header->seq_number;
-                        socket->seq_number=socket->seq_number+1;
+                        socket->seq_number=socket->seq_number+1; //needs change
+                        socket->recvbuf+=socket->buf_fill_level;
+                        memcpy(socket->recvbuf,rcv_buffer,MICROTCP_MSS);
+                        memcpy(buffer,socket->recvbuf,length);
                         return -1;
                 }
                 else{
+                    
+                        if(length>=MICROTCP_RECVBUF_LEN){ //if the external buffer of the application is >= with the recvbuf of the socket
+                            printf("socket->buf_fill_level: %d\n",socket->buf_fill_level);
+                            if(socket->buf_fill_level+MICROTCP_MSS>MICROTCP_RECVBUF_LEN){ //if the last packet doesn't fill to recvbuf then just copy recvbuf to buffer and write the new packet to recvbuf from the beggining and then return the number of the data recieve(the buf_fill_level)
+                                    printf("mpikame edw\n");
+                                    socket->recvbuf-=socket->buf_fill_level;
+                                    printf("o pointer paidia: %d\n",socket->recvbuf);
+                                    memcpy(buffer,socket->recvbuf,socket->buf_fill_level);
+                                    memcpy(socket->recvbuf,rcv_buffer,MICROTCP_MSS);
+                                    size_t temp=socket->buf_fill_level;
+                                    socket->buf_fill_level=0;
+                                    socket->buf_fill_level+=MICROTCP_MSS;
+                                    printf("o temp: %d\n",temp);
+                                    return temp;
+                                    
+                            }
+                            
+                            socket->recvbuf+=MICROTCP_MSS;    //change tha pointer of recvbuf 
+                            printf("o pointer paidia: %d\n",socket->recvbuf);
+                            memcpy(socket->recvbuf,rcv_buffer,MICROTCP_MSS); //copy rcv_buffer of send to recvbuf of socket
+                            socket->buf_fill_level+=MICROTCP_MSS;       // change the buf_fill_level to new size
+                            printf("i diafora: %d\n",socket->recvbuf-socket->buf_fill_level);
+                            if(socket->buf_fill_level==length){         // if recvbuf is full then change the pointer and copy to buffer 
+                                                                        // to send the application.then set recvbuf empty by changing buf_fill_level to 0
+                                    socket->recvbuf-=socket->buf_fill_level;
+                                    memcpy(buffer,socket->recvbuf,length);
+                                    socket->buf_fill_level=0;
+                                    return length;
+                            }
+                            
+                        }else{ //if the external buffer of the application is less than recvbuf of the socket 
+                            if(
+                        }
+                        
                         
                 }
         }
     }
 }
+
+

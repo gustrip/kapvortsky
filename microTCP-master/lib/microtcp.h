@@ -27,7 +27,7 @@
 /*
  * Several useful constants
  */
-#define MICROTCP_ACK_TIMEOUT_US 2000
+#define MICROTCP_ACK_TIMEOUT_US 20000
 #define MICROTCP_MSS 1400
 #define MICROTCP_RECVBUF_LEN 8192
 #define MICROTCP_WIN_SIZE MICROTCP_RECVBUF_LEN
@@ -94,13 +94,8 @@ typedef struct {
 	uint32_t	future_use2; /**< 32-bits for future use */
 	uint32_t	checksum;    /**< CRC-32 checksum, see crc32() in utils folder */
 } microtcp_header_t;
-/**
- * microTCP packet holding header and data section
- */
-typedef struct{
-    microtcp_header_t   *header;
-    uint8_t             *data;             
-}microtcp_packet_t;
+
+
 
 microtcp_sock_t
 microtcp_socket(int domain, int type, int protocol);
@@ -125,7 +120,7 @@ microtcp_send(microtcp_sock_t *socket, const void *buffer, size_t length, int fl
 ssize_t
 microtcp_recv(microtcp_sock_t *socket, void *buffer, size_t length, int flags);
 
-microtcp_packet_t *create_packet(microtcp_header_t *header,void *data,size_t length);
-void free_packet(microtcp_packet_t  *packet);
+
+
 
 #endif /* LIB_MICROTCP_H_ */
