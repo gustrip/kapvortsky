@@ -504,7 +504,7 @@ microtcp_send(microtcp_sock_t *socket, const void *buffer, size_t length, int fl
                 memcpy(header,rcv_buffer,sizeof(microtcp_header_t));
                 if(!error_checking1(header,sizeof(microtcp_header_t))){
                     printf("#############error###############\n");
-                    goto Retransmissions;
+                   // goto Retransmissions;
                 }
                 uint32_t ack=socket->ack_number-(chunks-i)*sizeof(microtcp_header_t);
                 if(header->seq_number==ack){
@@ -550,7 +550,10 @@ microtcp_recv(microtcp_sock_t *socket, void *buffer, size_t length, int flags)
                 memcpy(header,rcv_buffer,sizeof(microtcp_header_t));
                 if(!error_checking(header,rcv_buffer,MICROTCP_MSS)){ //error_checking
                     printf("#############error###############\n");
-                    k=-1;
+                    microtcp_header_t sending_header=create_header(socket,0);
+                    sending_header.window=MICROTCP_RECVBUF_LEN-socket->buf_fill_level;
+                    sending_header.data_len=socket->buf_fill_level;
+                    int m=sendto(socket->sd,&sending_header,sizeof(microtcp_header_t), 0, socket->addr,socket->addr_len);
                 }
                 rcv_buffer+=sizeof(microtcp_header_t);          //move pointer to the data
                 if(header->control==0000000000001001 ) { //FIN && ACK from client
