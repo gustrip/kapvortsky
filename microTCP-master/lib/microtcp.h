@@ -27,7 +27,7 @@
 /*
  * Several useful constants
  */
-#define MICROTCP_ACK_TIMEOUT_US 20000
+#define MICROTCP_ACK_TIMEOUT_US 200000
 #define MICROTCP_MSS 1400
 #define MICROTCP_RECVBUF_LEN 8192
 #define MICROTCP_WIN_SIZE MICROTCP_RECVBUF_LEN
@@ -77,6 +77,7 @@ typedef struct {
 	size_t			ack_number; /**< Keep the state of the ack number */
 	struct sockaddr        *addr; 
         socklen_t               addr_len; 
+        size_t                  rm_data; //total size of data to be returned when the connection is closing by peer
 } microtcp_sock_t;
 
 

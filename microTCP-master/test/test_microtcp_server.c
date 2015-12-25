@@ -10,7 +10,7 @@ int main(int argc, char **argv){
     buffer=(uint8_t *)malloc(CHUNK_SIZE);
     int received;
     
-    fp = fopen("temp.jpg", "w");
+    fp = fopen("temp.vcf", "w");
 	if(!fp){
 		perror("Open file for writing");
 		free(buffer);
@@ -57,26 +57,34 @@ int main(int argc, char **argv){
       error("ERROR on inet_ntoa\n");
     printf("server received datagram from %s (%s)\n", 
 	   hostp->h_name, hostaddrp);
-  
+  int l=0;
    while( (received=microtcp_recv(&server_st,buffer,CHUNK_SIZE,0)) > 0){
+            l++;
+            printf("received: %d\n",received);
+            //printf("%s\n",(char *)buffer); 
             written = fwrite(buffer, sizeof(uint8_t), received, fp);
             total_bytes += received;
             printf("received: %d\n",received);
+            printf("written: %d\n",written);
+            printf("total_bytes: %d\n",total_bytes);
+            printf("packet #: %d\n",l);
             if(written * sizeof(uint8_t) != received){
                     printf("Failed to write to the file the"
                             " amount of data received from the network.\n");
                     close(server_st.sd);
                     return -1;
             }
-             if(server_st.state==INVALID){
-                error("ERROR at recv");
-                close(server_st.sd);
-                return -1;
-            }
    }
+   l++;
+   printf("number of repeats: %d\n",l);
     if(server_st.state==INVALID){
             error("ERROR at recv when shutdowning");
     }else if(server_st.state==CLOSING_BY_PEER){
+        if(server_st.rm_data!=0){
+            printf("data to be written: %d\n",server_st.rm_data);
+            written=fwrite(buffer, sizeof(uint8_t),server_st.rm_data, fp);
+            printf(" written: %d\n",written);
+        }
         server_st=microtcp_shutdown(server_st,SHUT_RDWR);
         if(server_st.state==INVALID){
             error("ERROR at shutdown");
@@ -86,25 +94,6 @@ int main(int argc, char **argv){
         free(buffer);
         return 0;
     }
-   
-    
-    
-//    if(microtcp_recv(&server_st,buffer,sizeof(buffer),0)==-1){
-//        if(server_st.state==INVALID){
-//             error("ERROR at recv when shutdowning");
-//         }else if(server_st.state==CLOSING_BY_PEER){
-//             server_st=microtcp_shutdown(server_st,SHUT_RDWR);
-//             if(server_st.state==INVALID){
-//                 error("ERROR at shutdown");
-//             }  
-//             close(server_st.sd);
-//         } 
-//    
-//    }
-//     if(server_st.state==INVALID){
-//         error("ERROR at recv");
-//     }
-//     printf("%s\n",buffer);
        
    
     

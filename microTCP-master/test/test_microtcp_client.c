@@ -5,7 +5,7 @@ int main(int argc, char **argv){
     size_t read_items = 0;
     ssize_t data_sent;
   FILE *fp;
-  fp=fopen("IMG_20151130_202634.jpg","r");
+  fp=fopen("/media/kapadais/KotsosHD/desktop_8_12/kinito/contacts.vcf","r");
   if(fp==NULL)
     {
       printf("file does not exist\n");
@@ -53,6 +53,7 @@ int main(int argc, char **argv){
   if(client_st.state==INVALID){
     error("ERROR at connect function(problem with 3-way handshake"); 
   }
+  int k=0;
   while( !feof(fp) ){
 		read_items = fread(buffer, sizeof(uint8_t), CHUNK_SIZE, fp);
 		if(read_items < 1){
@@ -63,8 +64,9 @@ int main(int argc, char **argv){
 			fclose(fp);
 			return -1;
 		}
-
 		data_sent =microtcp_send(&client_st, buffer, read_items * sizeof(uint8_t), 0);
+                k++;
+                printf("packet #: %d\n",k);
 		if(data_sent != read_items * sizeof(uint8_t)){
 			printf("Failed to send the"
 			       " amount of data read from the file.\n");
@@ -74,9 +76,8 @@ int main(int argc, char **argv){
 			fclose(fp);
 			return -1;
 		}
-
 }
-
+printf("number of repeats: %d\n",k);
     printf("Data sent. Terminating...\n");
     client_st=microtcp_shutdown(client_st,SHUT_RDWR);
     if(client_st.state==INVALID){
@@ -86,20 +87,6 @@ int main(int argc, char **argv){
     free(buffer);
     fclose(fp);
     return 0;
-
-  
-  
-  
-  
-  
-//   microtcp_send(&client_st,file_buffer,file_size,0);
-//   if(client_st.state==INVALID){
-//       error("ERROR at send");
-//   }
-//   client_st=microtcp_shutdown(client_st,SHUT_RDWR);
-//   if(client_st.state==INVALID){
-//       error("ERROR at shutdown");
-//   } 
   
   
   
