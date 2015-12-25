@@ -66,7 +66,7 @@ int main(int argc, char **argv){
 		}
 		data_sent =microtcp_send(&client_st, buffer, read_items * sizeof(uint8_t), 0);
                 k++;
-                printf("packet #: %d\n",k);
+                //printf("packet #: %d\n",k);
 		if(data_sent != read_items * sizeof(uint8_t)){
 			printf("Failed to send the"
 			       " amount of data read from the file.\n");
@@ -77,7 +77,7 @@ int main(int argc, char **argv){
 			return -1;
 		}
 }
-printf("number of repeats: %d\n",k);
+    printf("number of repeats: %d\n",k);
     printf("Data sent. Terminating...\n");
     client_st=microtcp_shutdown(client_st,SHUT_RDWR);
     if(client_st.state==INVALID){

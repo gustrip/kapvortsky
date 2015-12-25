@@ -131,8 +131,90 @@ server_tcp(uint16_t listen_port, const char *file)
 int
 server_microtcp(uint16_t listen_port, const char *file)
 {
-	/*TODO: Write your code here */
-	return 0;
+        FILE *fp;
+        ssize_t written;
+        ssize_t total_bytes = 0;
+        uint8_t *buffer;
+        buffer=(uint8_t *)malloc(CHUNK_SIZE);
+        int received;
+        int port=listen_port;
+        struct hostent *hostp;
+        char *hostaddrp;
+    fp = fopen(file, "w");
+	if(!fp){
+		perror("Open file for writing");
+		free(buffer);
+		return -EXIT_FAILURE;
+	}
+	
+        microtcp_sock_t server_st=microtcp_socket(AF_INET, SOCK_DGRAM, 0);
+        if(server_st.state==INVALID){
+        error("ERROR at creating microtcp_socket"); 
+        }
+
+        struct sockaddr_in server_addr,client_addr;
+        bzero((char *) &server_addr, sizeof(server_addr)); //server's Internet address
+        server_addr.sin_family = AF_INET;
+        server_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+        server_addr.sin_port = htons((unsigned short)port);
+
+        int k=microtcp_bind(server_st,(struct sockaddr *) &server_addr,sizeof(server_addr));
+        if(k<0){
+            error("ERROR at binding");
+        }
+        server_st=microtcp_accept(server_st,(struct sockaddr *) &client_addr,sizeof(client_addr));
+        if(server_st.state==INVALID){
+        error("ERROR at accept(problem with 3-way handshake"); 
+        }
+        //find host by address 
+        hostp = gethostbyaddr((const char *)&client_addr.sin_addr.s_addr,  
+                                sizeof(client_addr.sin_addr.s_addr), AF_INET); 
+        if (hostp == NULL)
+            error("ERROR on gethostbyaddr");
+        hostaddrp = inet_ntoa(client_addr.sin_addr);
+        if (hostaddrp == NULL)
+            error("ERROR on inet_ntoa\n");
+        printf("server received datagram from %s (%s)\n", 
+                hostp->h_name, hostaddrp);
+        
+       // int l=0;
+        while( (received=microtcp_recv(&server_st,buffer,CHUNK_SIZE,0)) > 0){
+            //l++;
+            written = fwrite(buffer, sizeof(uint8_t), received, fp);
+            total_bytes += received;
+            //printf("received: %d\n",received);
+           // printf("written: %d\n",written);
+           // printf("total_bytes: %d\n",total_bytes);
+           // printf("packet #: %d\n",l);
+            if(written * sizeof(uint8_t) != received){
+                    printf("Failed to write to the file the"
+                            " amount of data received from the network.\n");
+                    close(server_st.sd);
+                    return -1;
+            }
+        }
+       // l++;
+        //printf("number of repeats: %d\n",l);
+        if(server_st.state==INVALID){
+            error("ERROR at recv when shutdowning");
+            return -1;
+        }else if(server_st.state==CLOSING_BY_PEER){
+        if(server_st.rm_data!=0){
+           // printf("data to be written: %d\n",server_st.rm_data);
+            written=fwrite(buffer, sizeof(uint8_t),server_st.rm_data, fp);
+            //printf(" written: %d\n",written);
+        }
+        server_st=microtcp_shutdown(server_st,SHUT_RDWR);
+        if(server_st.state==INVALID){
+            error("ERROR at shutdown");
+            return -1;
+        }
+        close(server_st.sd);
+        fclose(fp);
+        free(buffer);
+        return 0;
+        }
+        return -1;
 }
 
 
@@ -220,8 +302,82 @@ client_tcp(const char *serverip, uint16_t server_port, const char *file)
 int
 client_microtcp(const char *serverip, uint16_t server_port, const char *file)
 {
-	/*TODO: Write your code here */
-	return 0;
+    size_t read_items = 0;
+    ssize_t data_sent;
+    FILE *fp;
+    fp=fopen(file,"r");
+    if(fp==NULL)
+    {
+        printf("file does not exist\n");
+    }
+
+    uint8_t * buffer=(uint8_t *)malloc(CHUNK_SIZE);
+    fseek(fp,0,SEEK_SET);
+    struct hostent *server;
+    char *hostname=serverip;
+    int port=server_port;
+    
+    server = gethostbyname(hostname);
+    if (server == NULL) {
+        fprintf(stderr,"ERROR, no such host as %s\n", hostname);
+        exit(-1);
+    }
+  
+    microtcp_sock_t client_st=microtcp_socket(AF_INET, SOCK_DGRAM, 0);
+    if(client_st.state==INVALID){
+        error("ERROR at creating microtcp_socket"); 
+    }
+
+    struct sockaddr_in client_addr,server_addr;
+    bzero((char *) &client_addr, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    if (inet_aton(hostname, &server_addr.sin_addr)==0) {  //server's Internet address
+        fprintf(stderr, "inet_aton() failed\n");
+        exit(-1);
+        
+    }
+    server_addr.sin_port = htons((unsigned short)port);
+
+
+    client_st=microtcp_connect(client_st,(struct sockaddr *) &server_addr,sizeof(server_addr));
+    if(client_st.state==INVALID){
+        error("ERROR at connect function(problem with 3-way handshake"); 
+    }
+    //int k=0;
+    while( !feof(fp) ){
+		read_items = fread(buffer, sizeof(uint8_t), CHUNK_SIZE, fp);
+		if(read_items < 1){
+			perror("Failed read from file");
+			microtcp_shutdown(client_st,SHUT_RDWR);
+			close(client_st.sd);
+			free(buffer);
+			fclose(fp);
+			return -1;
+		}
+		data_sent =microtcp_send(&client_st, buffer, read_items * sizeof(uint8_t), 0);
+                //k++;
+                //printf("packet #: %d\n",k);
+		if(data_sent != read_items * sizeof(uint8_t)){
+			printf("Failed to send the"
+			       " amount of data read from the file.\n");
+			microtcp_shutdown(client_st,SHUT_RDWR);
+			close(client_st.sd);
+			free(buffer);
+			fclose(fp);
+			return -1;
+		}
+    }
+    //printf("number of repeats: %d\n",k);
+    //printf("Data sent. Terminating...\n");
+    client_st=microtcp_shutdown(client_st,SHUT_RDWR);
+    if(client_st.state==INVALID){
+        error("ERROR at shutdown");
+        return -1;
+    } 
+    close(client_st.sd);
+    free(buffer);
+    fclose(fp);
+    return 0;
 }
 
 
@@ -285,6 +441,7 @@ main(int argc, char **argv)
 	if(is_server){
 
 		if(use_microtcp){
+                        printf("mpike edw");
 			exit_code = server_microtcp(port, filestr);
 		}
 		else{

@@ -60,8 +60,6 @@ int main(int argc, char **argv){
   int l=0;
    while( (received=microtcp_recv(&server_st,buffer,CHUNK_SIZE,0)) > 0){
             l++;
-            printf("received: %d\n",received);
-            //printf("%s\n",(char *)buffer); 
             written = fwrite(buffer, sizeof(uint8_t), received, fp);
             total_bytes += received;
             printf("received: %d\n",received);
