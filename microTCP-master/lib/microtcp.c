@@ -350,6 +350,7 @@ microtcp_shutdown(microtcp_sock_t socket, int how)
 		printf("you are client\n");
                 void *send_buffer;
                 socket.seq_number=socket.seq_number+1;
+                socket.ack_number=0;
 		microtcp_header_t client_header=create_header(&socket,0);
 		microtcp_header_t * server_header = malloc(sizeof(microtcp_header_t));
 		client_header.control=0000000000001001; //FIN AND ACK with ack_number the previously received seq_number_server;
@@ -465,12 +466,14 @@ microtcp_send(microtcp_sock_t *socket, const void *buffer, size_t length, int fl
             for(i = 0; i < chunks ; i++){
                 
                 buffer+=i*MICROTCP_MSS;
+                socket->ack_number=socket->seq_number+sizeof(microtcp_header_t)+MICROTCP_MSS;
                 microtcp_header_t  header =create_header1(socket,length);
+                header.data_len=sizeof(microtcp_header_t)+MICROTCP_MSS;
                 memcpy(send_buffer,&header,sizeof(microtcp_header_t));
                 send_buffer+=sizeof(microtcp_header_t);
                 memcpy(send_buffer,buffer,MICROTCP_MSS);
-                void * temp=send_buffer+sizeof(microtcp_header_t);
                 send_buffer-=sizeof(microtcp_header_t);
+                header.data_len=MICROTCP_MSS;
                 uint32_t csum=make_checksum(&header,send_buffer,sizeof(microtcp_header_t)+MICROTCP_MSS);       //create checksum and assign it to the right header option
                 header.checksum=csum;
                 memcpy(send_buffer,&header,sizeof(microtcp_header_t));
@@ -479,29 +482,32 @@ microtcp_send(microtcp_sock_t *socket, const void *buffer, size_t length, int fl
                         socket->state=INVALID;
                         free(send_buffer);
                 }
+                socket->seq_number+=k;
             }
             int s=bytes_to_send % (sizeof(microtcp_header_t)+MICROTCP_MSS);
             if(s){
                 memset(send_buffer,0,sizeof(microtcp_header_t)+MICROTCP_MSS);
                 chunks++;
                 buffer+=i*MICROTCP_MSS;
+                socket->ack_number=socket->seq_number+sizeof(microtcp_header_t)+MICROTCP_MSS;
                 microtcp_header_t  header =create_header1(socket,length);
+                header.data_len=length-(i*MICROTCP_MSS);
                 memcpy(send_buffer,&header,sizeof(microtcp_header_t));
                 send_buffer+=sizeof(microtcp_header_t);
                 memcpy(send_buffer,buffer,length-(i*MICROTCP_MSS));
                 send_buffer-=sizeof(microtcp_header_t);
-                uint32_t csum=make_checksum(&header,send_buffer,sizeof(microtcp_header_t)+MICROTCP_MSS);       //create checksum and assign it to the right header option
+                
+                uint32_t csum=make_checksum(&header,send_buffer,sizeof(microtcp_header_t)+(length-(i*MICROTCP_MSS)));       //create checksum and assign it to the right header option
                 header.checksum=csum;
                 memcpy(send_buffer,&header,sizeof(microtcp_header_t));
-                void * temp=send_buffer+sizeof(microtcp_header_t);
-//                 printf("tou send_buffer2:  %s\n",(char *) temp);
-                int k=sendto(socket->sd,send_buffer,sizeof(microtcp_header_t)+MICROTCP_MSS, 0, socket->addr,socket->addr_len);
-//                 printf("edw yolo2 %d\n",k);
+                int k=sendto(socket->sd,send_buffer,sizeof(microtcp_header_t)+(length-(i*MICROTCP_MSS)), 0, socket->addr,socket->addr_len);
                 if (k==-1){
                         socket->state=INVALID;
                         free(send_buffer);
                 }
+                socket->seq_number+=k;
             }
+            
 //              printf("chunks: %d\n",chunks);
             remaining -= bytes_to_send ;
             data_sent += bytes_to_send ;
@@ -509,6 +515,9 @@ microtcp_send(microtcp_sock_t *socket, const void *buffer, size_t length, int fl
 //              printf("remaining: %d\n",remaining);
         }
         buffer-=data_sent;
+        
+        //retransmission pending
+        
         free(send_buffer);
 	return data_sent;
         
@@ -584,7 +593,7 @@ microtcp_recv(microtcp_sock_t *socket, void *buffer, size_t length, int flags)
                                     socket->recvbuf-=socket->buf_fill_level;
 //                                     printf("o pointer paidia: %d\n",socket->recvbuf);
                                     memcpy(buffer,socket->recvbuf,socket->buf_fill_level);
-                                    memcpy(socket->recvbuf,rcv_buffer,MICROTCP_MSS);
+                                    memcpy(socket->recvbuf,rcv_buffer,header->data_len);
                                     size_t temp=socket->buf_fill_level;
                                     socket->buf_fill_level=0;
                                     socket->buf_fill_level+=MICROTCP_MSS;
@@ -613,19 +622,19 @@ microtcp_recv(microtcp_sock_t *socket, void *buffer, size_t length, int flags)
 //                                 socket->recvbuf-=socket->buf_fill_level;
 //                                 printf("o pointer paidia: %d\n",socket->recvbuf);
                                 memcpy(buffer,socket->recvbuf,socket->buf_fill_level);
-                                memcpy(socket->recvbuf,rcv_buffer,MICROTCP_MSS);
+                                memcpy(socket->recvbuf,rcv_buffer,header->data_len);
                                 size_t temp=socket->buf_fill_level;
                                 socket->buf_fill_level=0;
-                                socket->buf_fill_level+=MICROTCP_MSS;
-                                 printf("o temp: %d\n",temp);
+                                socket->buf_fill_level+=header->data_len;
+                                 printf("ta data pou girname: %d\n",temp);
                                 return temp;
                             }
                             socket->recvbuf+=socket->buf_fill_level;    //change tha pointer of recvbuf 
 //                             printf("o pointer paidia: %d\n",socket->recvbuf);
-                            memcpy(socket->recvbuf,rcv_buffer,MICROTCP_MSS); //copy rcv_buffer of send to recvbuf of socket
+                            memcpy(socket->recvbuf,rcv_buffer,header->data_len); //copy rcv_buffer of send to recvbuf of socket
                             socket->recvbuf-=socket->buf_fill_level;
 //                             printf("o pointer arxikopoieite: %d\n",socket->recvbuf);
-                            socket->buf_fill_level+=MICROTCP_MSS;       // change the buf_fill_level to new size
+                            socket->buf_fill_level+=header->data_len;       // change the buf_fill_level to new size
 //                             printf("socket->buf_fill_level: %d\n",socket->buf_fill_level);
 //                             printf("o pointer opws prepei na einai meta: %d\n",socket->recvbuf+socket->buf_fill_level);
                             
